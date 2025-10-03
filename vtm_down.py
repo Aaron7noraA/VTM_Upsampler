@@ -1,10 +1,9 @@
 import torch
 import torch.nn as nn
-import numpy as np
 
-class VTMDownsamplerCorrect(nn.Module):
+class VTMDownsampler(nn.Module):
     """
-    Correct VTM downsampler implementation.
+    Efficient VTM downsampler using the same approach as the fast upsampler.
     Matches VTM's sampleRateConv function for downsampling.
     """
     
@@ -14,14 +13,12 @@ class VTMDownsamplerCorrect(nn.Module):
         self.max_val = (1 << bit_depth) - 1
         
         # Load all 8 downsampling filter sets from VTM
-        self.downsampling_filters = self._load_downsampling_filters()
+        self._load_filters()
         
-    def _load_downsampling_filters(self):
+    def _load_filters(self):
         """Load all 8 downsampling filter sets from VTM"""
-        filters = {}
-        
-        # D=0 filter set
-        filters[0] = torch.tensor([
+        # D=0 filter set (scaling ratio ~1.0)
+        taps_d0 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -38,10 +35,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=1 filter set (Kaiser(7)-windowed sinc ratio 1.35)
-        filters[1] = torch.tensor([
+        taps_d1 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -58,10 +55,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=2 filter set (Kaiser(7)-windowed sinc ratio 1.5)
-        filters[2] = torch.tensor([
+        taps_d2 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -78,10 +75,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=3 filter set (Kaiser(7)-windowed sinc ratio 1.75)
-        filters[3] = torch.tensor([
+        taps_d3 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -98,10 +95,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=4 filter set (Kaiser(7)-windowed sinc ratio 2.0)
-        filters[4] = torch.tensor([
+        taps_d4 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -118,10 +115,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=5 filter set (Kaiser(7)-windowed sinc ratio 2.5)
-        filters[5] = torch.tensor([
+        taps_d5 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -138,10 +135,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=6 filter set (Kaiser(7)-windowed sinc ratio 3.0)
-        filters[6] = torch.tensor([
+        taps_d6 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -158,10 +155,10 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
         # D=7 filter set (Kaiser(7)-windowed sinc ratio 4.0)
-        filters[7] = torch.tensor([
+        taps_d7 = [
             [0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 2, -6, 127, 7, -2, 0, 0, 0, 0],
             [0, 0, 0, 3, -12, 125, 16, -5, 1, 0, 0, 0],
@@ -178,10 +175,26 @@ class VTMDownsamplerCorrect(nn.Module):
             [0, 0, 0, 1, -7, 26, 120, -16, 4, 0, 0, 0],
             [0, 0, 0, 1, -5, 16, 125, -12, 3, 0, 0, 0],
             [0, 0, 0, 0, -2, 7, 127, -6, 2, 0, 0, 0]
-        ], dtype=torch.int32)
+        ]
         
-        return filters
-    
+        # Store all filter sets
+        self.filter_sets = {
+            0: torch.tensor(taps_d0, dtype=torch.float32),
+            1: torch.tensor(taps_d1, dtype=torch.float32),
+            2: torch.tensor(taps_d2, dtype=torch.float32),
+            3: torch.tensor(taps_d3, dtype=torch.float32),
+            4: torch.tensor(taps_d4, dtype=torch.float32),
+            5: torch.tensor(taps_d5, dtype=torch.float32),
+            6: torch.tensor(taps_d6, dtype=torch.float32),
+            7: torch.tensor(taps_d7, dtype=torch.float32)
+        }
+        
+        # Filter parameters
+        self.numFracShift = 4  # 16 fractional phases
+        self.numFracMask = 15
+        self.filterLength = 12
+        self.log2Norm = 14  # For downsampling
+        
     def _select_filter(self, scaling_ratio):
         """Select filter based on scaling ratio (matching VTM logic)"""
         if scaling_ratio > (15 << 14) // 4:
@@ -201,98 +214,76 @@ class VTMDownsamplerCorrect(nn.Module):
         else:
             return 0
     
-    def _horizontal_filter(self, x, scaling_ratio, filter_idx):
-        """Horizontal filtering pass (first pass)"""
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor, scale: float):
+        """
+        Efficient two-pass downsampling using the same approach as the fast upsampler.
+        
+        Args:
+            x: [B,C,H,W] float tensor
+            scale: < 1.0 (e.g., 0.5 for 2x downsampling)
+        Returns:
+            [B,C,round(H*scale), round(W*scale)]
+        """
         B, C, H, W = x.shape
-        scaled_width = W // 2  # Assuming 2x downsampling
+        newW = int(round(W * scale))
+        newH = int(round(H * scale))
         
         # Convert to fixed-point scaling ratio
-        scale_x = 1  # For 2x downsampling
-        pos_shift_x = 14
-        num_frac_shift = 4
-        num_frac_positions = 16
-        
-        # Create intermediate buffer
-        buf = torch.zeros(B, C, H, scaled_width, dtype=torch.int32, device=x.device)
-        
-        for i in range(scaled_width):
-            # Calculate reference position (matching VTM logic)
-            ref_pos = (((i << scale_x) - 0) * scaling_ratio + 0) >> pos_shift_x
-            integer = ref_pos >> num_frac_shift
-            frac = ref_pos & (num_frac_positions - 1)
-            
-            # Get filter coefficients
-            filter_coeffs = self.downsampling_filters[filter_idx][frac]
-            
-            for j in range(H):
-                sum_val = 0
-                for k in range(12):  # 12-tap filter
-                    x_int = torch.clamp(integer + k - 6 + 1, 0, W - 1)
-                    sum_val += filter_coeffs[k] * x[:, :, j, x_int]
-                
-                buf[:, :, j, i] = sum_val
-        
-        return buf
-    
-    def _vertical_filter(self, buf, scaling_ratio, filter_idx):
-        """Vertical filtering pass (second pass)"""
-        B, C, H, W = buf.shape
-        scaled_height = H // 2  # Assuming 2x downsampling
-        
-        # Convert to fixed-point scaling ratio
-        scale_y = 1  # For 2x downsampling
-        pos_shift_y = 14
-        num_frac_shift = 4
-        num_frac_positions = 16
-        
-        # Create output buffer
-        result = torch.zeros(B, C, scaled_height, W, dtype=torch.int32, device=buf.device)
-        
-        for j in range(scaled_height):
-            # Calculate reference position (matching VTM logic)
-            ref_pos = (((j << scale_y) - 0) * scaling_ratio + 0) >> pos_shift_y
-            integer = ref_pos >> num_frac_shift
-            frac = ref_pos & (num_frac_positions - 1)
-            
-            # Get filter coefficients
-            filter_coeffs = self.downsampling_filters[filter_idx][frac]
-            
-            for i in range(W):
-                sum_val = 0
-                for k in range(12):  # 12-tap filter
-                    y_int = torch.clamp(integer + k - 6 + 1, 0, H - 1)
-                    sum_val += filter_coeffs[k] * buf[:, :, y_int, i]
-                
-                # Apply normalization and clamping (matching VTM)
-                log2_norm = 14  # For downsampling
-                rounding_offset = 1 << (log2_norm - 1)
-                normalized = (sum_val + rounding_offset) >> log2_norm
-                result[:, :, j, i] = torch.clamp(normalized, 0, self.max_val)
-        
-        return result.float()
-    
-    def forward(self, x, scale_factor=2.0):
-        """
-        Two-pass downsampling: horizontal then vertical
-        """
-        # Convert to fixed-point scaling ratio
-        scaling_ratio = int(scale_factor * (1 << 14))
+        scaling_ratio = int(scale * (1 << 14))
         
         # Select appropriate filter
         filter_idx = self._select_filter(scaling_ratio)
+        taps = self.filter_sets[filter_idx]
         
-        # Two-pass filtering
-        # Pass 1: Horizontal filtering
-        buf = self._horizontal_filter(x, scaling_ratio, filter_idx)
+        # Horizontal pass: [B,C,H,newW]
+        buf = x.new_zeros((B, C, H, newW), dtype=torch.float32)
+        center = self.filterLength // 2 - 1
         
-        # Pass 2: Vertical filtering  
-        result = self._vertical_filter(buf, scaling_ratio, filter_idx)
+        for i in range(newW):
+            # Map output column i -> source pos (14-bit fixed point)
+            refPosFixed = int(i * (1 << 14) / scale)
+            refPosPhase = refPosFixed >> (14 - self.numFracShift)
+            integer = refPosPhase >> self.numFracShift
+            frac = refPosPhase & self.numFracMask
+            f = taps[frac]  # [filterLength]
+            
+            acc = x.new_zeros((B, C, H), dtype=torch.float32)
+            for k in range(self.filterLength):
+                xInt = max(0, min(W - 1, integer + k - center))
+                acc += f[k] * x[..., xInt]  # Vectorized across B,C,H
+            buf[..., i] = acc
         
-        return result
+        # Vertical pass + final normalization: [B,C,newH,newW]
+        out = x.new_zeros((B, C, newH, newW), dtype=torch.float32)
+        rnd = float(1 << (self.log2Norm - 1))
+        
+        for j in range(newH):
+            refPosFixed = int(j * (1 << 14) / scale)
+            refPosPhase = refPosFixed >> (14 - self.numFracShift)
+            integer = refPosPhase >> self.numFracShift
+            frac = refPosPhase & self.numFracMask
+            f = taps[frac]
+            
+            acc = x.new_zeros((B, C, newW), dtype=torch.float32)
+            for k in range(self.filterLength):
+                yInt = max(0, min(H - 1, integer + k - center))
+                acc += f[k] * buf[:, :, yInt, :]  # Vectorized across B,C,W
+            out[:, :, j, :] = (acc + rnd) / float(1 << self.log2Norm)
+        
+        return out
 
-# Usage example:
-downsampler = VTMDownsamplerCorrect(bit_depth=8)
-input_tensor = torch.randn(1, 1, 1080, 1920)  # B, C, H, W
-downsampled = downsampler(input_tensor, scale_factor=2.0)
-print(f"Input shape: {input_tensor.shape}")
-print(f"Output shape: {downsampled.shape}")
+# Usage example
+if __name__ == "__main__":
+    # Test the downsampler
+    downsampler = VTMDownsampler(bit_depth=8)
+    input_tensor = torch.randn(1, 1, 1080, 1920)  # B, C, H, W
+    
+    with torch.no_grad():
+        downsampled = downsampler(input_tensor, scale=0.5)  # 2x downsampling
+        print(f"Input shape: {input_tensor.shape}")
+        print(f"Output shape: {downsampled.shape}")
+        
+        # Test different scaling ratios
+        downsampled_4x = downsampler(input_tensor, scale=0.25)  # 4x downsampling
+        print(f"4x downsampled shape: {downsampled_4x.shape}")
